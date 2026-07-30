@@ -1,0 +1,34 @@
+[project]
+name = "anpr-uz"
+version = "1.0.0"
+description = "ANPR Узбекистан: YOLO11 (детекция пластин) + TPS-ResNet-BiLSTM-CTC (best_accuracy.pth), FastAPI + WebSocket"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "torch>=2.4,<2.10",
+    "torchvision>=0.19",
+    "ultralytics>=8.3",
+    "opencv-python-headless>=4.10",
+    "numpy>=1.26,<2.3",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "python-multipart>=0.0.18",
+    "pillow>=10.4",
+    "huggingface-hub>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "httpx>=0.28", "ruff>=0.8"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]  # Depends() в аргументах — это норма для FastAPI
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
