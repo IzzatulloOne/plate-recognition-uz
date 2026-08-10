@@ -21,6 +21,15 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "httpx>=0.28", "ruff>=0.8"]
 
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Без явного списка setuptools пытается угадать пакеты по корню проекта и падает
+# на "Multiple top-level packages discovered": рядом лежат data/ и models/.
+[tool.setuptools.packages.find]
+include = ["app*", "tools*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

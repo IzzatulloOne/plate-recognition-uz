@@ -53,7 +53,7 @@
 ```bash
 uv venv --python 3.12 .venv
 source .venv/bin/activate
-uv pip install -e .
+uv pip install -e ".[dev]"      # dev — тесты и линтер
 
 python -m tools.fetch_yolo                  # веса детектора
 cp .env.example .env                        # при необходимости
