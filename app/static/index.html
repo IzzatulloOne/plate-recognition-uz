@@ -97,7 +97,8 @@ const video = document.getElementById('video');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const grab = document.createElement('canvas');
-let ws = null, stream = null, timer = null, frameId = 0, lastResult = null;
+let ws = null, stream = null, timer = null, frameId = 0;
+let lastResult = null, prevResult = null, rafId = null;
 
 // Кадр, который сейчас обрабатывается на сервере. Боксы приходят с задержкой
 // 150-250 мс, и если рисовать их поверх живого <video>, машина за это время
@@ -135,15 +136,70 @@ function openWs() {
 }
 
 function onResult(msg) {
+  // Отсчёт ведём от момента СЪЁМКИ кадра, а не от прихода ответа: бокс посчитан
+  // по кадру, снятому круг назад, и предсказывать надо на весь этот интервал.
+  // Кадр в полёте всегда один, поэтому sentAt — это время съёмки именно этого кадра.
+  msg.t = sentAt;
+  prevResult = lastResult;
   lastResult = msg;
   document.getElementById('sFps').textContent = (msg.fps || 0).toFixed(1);
-  const rt = Date.now() - sentAt;                      // полный круг: отправка -> ответ
+  const rt = performance.now() - sentAt;              // полный круг: съёмка -> ответ
   document.getElementById('sRt').textContent = rt > 0 && rt < 10000 ? Math.round(rt) : '—';
   document.getElementById('sLat').textContent = Math.round(msg.server_ms || 0);
   document.getElementById('sDet').textContent = msg.plates.length;
   drawBoxes(msg);
   renderLive(msg.plates);
   (msg.events || []).forEach(addEvent);
+}
+
+// Экстраполяция рамок между ответами сервера.
+//
+// Ответ приходит раз в ~160 мс, а экран рисует 60 раз в секунду. Если просто
+// держать последний бокс, рамка стоит там, где номер БЫЛ, — это и есть отставание.
+// По двум последним ответам считаем скорость каждого трека (сопоставляя по
+// track_id) и сдвигаем рамку на прошедшее время. Пластины движутся почти
+// равномерно, поэтому линейного предсказания достаточно.
+// dt отсчитывается от съёмки, поэтому уже на старте равен кругу (~160 мс) и растёт
+// до прихода следующего ответа. Порог должен покрывать два круга с запасом.
+const MAX_PREDICT_MS = 600;
+
+function predictedBoxes(now) {
+  if (!lastResult) return null;
+  const dt = now - lastResult.t;
+  if (dt > MAX_PREDICT_MS) return null;         // ответов давно нет — рамок тоже
+
+  let vel = null;
+  if (prevResult) {
+    const span = lastResult.t - prevResult.t;
+    if (span > 20 && span < 1000) {
+      const before = new Map();
+      for (const p of prevResult.plates)
+        if (p.track_id != null) before.set(p.track_id, p.box);
+      vel = new Map();
+      for (const p of lastResult.plates) {
+        const old = p.track_id != null ? before.get(p.track_id) : null;
+        if (old) vel.set(p.track_id, p.box.map((v, i) => (v - old[i]) / span));
+      }
+    }
+  }
+
+  return lastResult.plates.map(p => {
+    const v = vel && p.track_id != null ? vel.get(p.track_id) : null;
+    const box = v ? p.box.map((c, i) => c + v[i] * dt) : p.box;
+    return { ...p, box };
+  });
+}
+
+function renderLoop() {
+  rafId = requestAnimationFrame(renderLoop);
+  if (!document.getElementById('smooth').checked) return;   // точный режим рисует по ответу
+  const plates = predictedBoxes(performance.now());
+  if (!plates || !lastResult) return;
+  const [w, h] = lastResult.frame_size;
+  if (!w || !h) return;
+  if (canvas.width !== w) { canvas.width = w; canvas.height = h; }
+  ctx.clearRect(0, 0, w, h);
+  paintBoxes(plates, w);
 }
 
 function drawBoxes(msg) {
@@ -154,15 +210,20 @@ function drawBoxes(msg) {
   // Точный режим: подкладываем кадр, по которому посчитаны боксы, — рамка всегда
   // совпадает с картинкой. Плавный: canvas остаётся прозрачным, сквозь него видно
   // живое видео 60 к/с, но рамка отстаёт на время обработки.
+  const smooth = document.getElementById('smooth').checked;
   if (inFlight) {
-    if (!document.getElementById('smooth').checked)
-      ctx.drawImage(inFlight, 0, 0, w, h);
+    if (!smooth) ctx.drawImage(inFlight, 0, 0, w, h);
     inFlight.close();
     inFlight = null;
   }
+  if (smooth) return;          // в плавном режиме рисует renderLoop с предсказанием
+  paintBoxes(msg.plates, w);
+}
+
+function paintBoxes(plates, w) {
   ctx.lineWidth = Math.max(2, w / 480);
   ctx.font = `${Math.max(14, w / 45)}px ui-monospace, monospace`;
-  for (const p of msg.plates) {
+  for (const p of plates) {
     const [x1, y1, x2, y2] = p.box;
     const col = p.valid ? '#3ddc84' : '#ffb020';
     ctx.strokeStyle = col;
@@ -202,6 +263,7 @@ function addEvent(ev) {
 }
 
 function startSending(source) {
+  if (rafId === null) renderLoop();          // цикл предсказания рамок, 60 к/с
   const fps = Math.min(30, Math.max(1, +document.getElementById('sendFps').value || 8));
   clearInterval(timer);
   timer = setInterval(() => {
@@ -210,13 +272,13 @@ function startSending(source) {
     // один кадр в полёте: следующий уходит только после ответа. Иначе клиент
     // шлёт быстрее, чем сервер считает, и отставание картинки копится.
     // 2 секунды — страховка на случай, если ответ потерялся.
-    if (inFlight && Date.now() - sentAt < 2000) return;
+    if (inFlight && performance.now() - sentAt < 2000) return;
     const vw = source.videoWidth, vh = source.videoHeight;
     if (!vw || !vh) return;
     grab.width = vw; grab.height = vh;
     grab.getContext('2d').drawImage(source, 0, 0, vw, vh);
     if (inFlight) inFlight.close();
-    createImageBitmap(grab).then(bmp => { inFlight = bmp; sentAt = Date.now(); });
+    createImageBitmap(grab).then(bmp => { inFlight = bmp; sentAt = performance.now(); });
     grab.toBlob(b => {
       if (b && ws && ws.readyState === 1) b.arrayBuffer().then(buf => ws.send(buf));
     }, 'image/jpeg', 0.7);
@@ -252,6 +314,8 @@ document.getElementById('btnStop').onclick = () => {
   clearInterval(timer); timer = null;
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   video.pause();
+  if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+  lastResult = prevResult = null;
   if (inFlight) { inFlight.close(); inFlight = null; }
   if (ws) { ws.close(); ws = null; }
   document.getElementById('btnCam').disabled = false;
