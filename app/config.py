@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     quantize: bool = Field(False, description="dynamic int8 для LSTM/Linear (быстрее на CPU)")
     text_head: str = "anpr"
     type_head: str = "ctype"
+    #: Двухстрочные квадратные пластины (прицепы). Текущий чекпоинт их не читает
+    #: (0/4 на выборке), а стоит это дорого: на реальном видео 36% кропов уходят
+    #: на двойное чтение, распознавание 184 мс против 97. Включать после дообучения.
+    two_line: bool = False
     type_head_colors: str = Field(
         "yellow,green",
         description="цвета фона, для которых вывод второй головы идёт в кандидаты: "
@@ -42,6 +46,10 @@ class Settings(BaseSettings):
     #: Дёшево (платим только за пустые кадры), но вытаскивает мелкие и косые пластины.
     det_retry_imgsz: int = Field(1536, description="0 = выключить второй проход")
     det_retry_conf: float = 0.10
+    #: Второй проход стоит ~366 мс и оправдан для одиночного фото. На видео кадр без
+    #: пластины — норма, а следующий шанс придёт через 150 мс, поэтому для потоков
+    #: и WebSocket он по умолчанию выключен.
+    det_retry_in_stream: bool = False
 
     # ---------------------------------------------------------------- пайплайн
     device: str = "cpu"
@@ -57,6 +65,11 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------- трекинг
     track_iou: float = 0.25
     track_max_age: int = 20
+    track_by_text: bool = Field(
+        True,
+        description="доклеивать трек по совпадению текста, если IoU не сработал "
+        "(съёмка на ходу, проезд по парковке)",
+    )
     min_votes: int = 3
     event_cooldown_s: float = 8.0
     event_update_margin: float = Field(

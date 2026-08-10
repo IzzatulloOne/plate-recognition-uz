@@ -37,12 +37,32 @@ class AppState:
     started_at: float = field(default_factory=time.time)
 
 
+def _warmup(pipeline: ANPRPipeline) -> None:
+    """Холостой прогон обеих моделей на старте.
+
+    Первый форвард всегда дорогой — выделение памяти и инициализация ядер. На
+    замере это 834 мс против 50-60 мс на последующих кадрах. Без прогрева эту
+    задержку оплачивает первый реальный клиент.
+    """
+    import numpy as np
+
+    t = time.time()
+    try:
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        pipeline.process_frame(frame, allow_retry=False)
+        pipeline.recognizer.read([np.zeros((32, 100, 3), dtype=np.uint8)])
+        log.info("прогрев моделей: %.0f мс", (time.time() - t) * 1000)
+    except Exception as exc:  # прогрев не критичен, сервер должен подняться
+        log.warning("прогрев не удался (%s), первый запрос будет медленнее", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("загружаю детектор %s", settings.detector_weights)
     log.info("загружаю распознаватель %s", settings.recognizer_weights)
     t0 = time.time()
     pipeline = ANPRPipeline(settings)
+    _warmup(pipeline)
     store = EventStore(
         settings.db_path,
         settings.snapshot_dir,

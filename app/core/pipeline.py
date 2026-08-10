@@ -18,7 +18,7 @@ from app.config import Settings
 from app.core import plate_rules
 from app.core.detector import Detection, PlateDetector, crop_plate
 from app.core.recognizer import PlateRecognizer
-from app.core.tracker import PlateTracker
+from app.core.tracker import PlateTracker, near_text
 
 
 @dataclass
@@ -95,6 +95,7 @@ class ANPRPipeline:
             num_threads=settings.torch_threads,
             text_head=settings.text_head,
             type_head=settings.type_head,
+            two_line=settings.two_line,
         )
         if settings.quantize:
             import torch
@@ -106,15 +107,19 @@ class ANPRPipeline:
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ инференс
-    def process_frame(self, frame: np.ndarray) -> FrameResult:
-        """Кропы прикладываются к результату как res._crops (для снапшотов)."""
+    def process_frame(self, frame: np.ndarray, allow_retry: bool = True) -> FrameResult:
+        """Кропы прикладываются к результату как res._crops (для снапшотов).
+
+        allow_retry=False отключает дорогой второй проход детектора — для видео,
+        где кадр без пластины обычное дело, а следующий шанс придёт через 150 мс.
+        """
         t_start = time.perf_counter()
         res = FrameResult(frame_size=(frame.shape[1], frame.shape[0]))
 
         with self._lock:
             t0 = time.perf_counter()
             dets = self.detector.detect(frame)
-            if not dets and self.settings.det_retry_imgsz > self.settings.det_imgsz:
+            if allow_retry and not dets and self.settings.det_retry_imgsz > self.settings.det_imgsz:
                 # пустой кадр — пробуем ещё раз крупнее: мелкие и косые пластины
                 # (грузовики, прицепы) на 640 часто теряются
                 dets = self.detector.detect(
@@ -198,10 +203,27 @@ class TrackedSession:
         self.settings = settings
         self.source = source
         self.tracker = PlateTracker(
-            iou_threshold=settings.track_iou, max_age=settings.track_max_age
+            iou_threshold=settings.track_iou,
+            max_age=settings.track_max_age,
+            by_text=settings.track_by_text,
         )
         self.frames = 0
         self._fps_window: list[float] = []
+        #: последний раз, когда номер уходил наружу — общий на сессию, а не на трек.
+        #: На подвижной камере трек может порваться, и обрывки выдали бы одну машину
+        #: несколько раз; кулдаун по тексту это ловит независимо от track_id.
+        self._emitted: dict[str, float] = {}
+
+    def _recently_emitted(self, text: str, ts: float) -> bool:
+        """Этот же номер (или он же с одной перепутанной буквой) уже уходил недавно?"""
+        window = self.settings.event_cooldown_s
+        for seen, when in list(self._emitted.items()):
+            if ts - when > window:
+                del self._emitted[seen]
+                continue
+            if seen == text or near_text(seen, text):
+                return True
+        return False
 
     @property
     def fps(self) -> float:
@@ -212,14 +234,20 @@ class TrackedSession:
 
     def process(self, frame: np.ndarray, on_event=None) -> FrameResult:
         ts = time.time()
-        res = self.pipeline.process_frame(frame)
+        res = self.pipeline.process_frame(
+            frame, allow_retry=self.settings.det_retry_in_stream
+        )
         crops = getattr(res, "_crops", [])
         self.frames += 1
         self._fps_window.append(ts)
         if len(self._fps_window) > 30:
             self._fps_window.pop(0)
 
-        ids = self.tracker.update([tuple(p.box) for p in res.plates], ts=ts)
+        ids = self.tracker.update(
+            [tuple(p.box) for p in res.plates],
+            ts=ts,
+            texts=[p.text for p in res.plates],
+        )
         for i, (pr, tid) in enumerate(zip(res.plates, ids, strict=True)):
             tr = self.tracker.get(tid)
             if tr is None:
@@ -248,7 +276,9 @@ class TrackedSession:
                 and tr.best_conf >= self.settings.rec_min_conf
                 and bool(tr.stable_text)
             )
-            fresh = (ts - tr.emitted_ts) >= self.settings.event_cooldown_s
+            fresh = (ts - tr.emitted_ts) >= self.settings.event_cooldown_s and not (
+                self._recently_emitted(tr.stable_text, ts) and not tr.emitted_text
+            )
             # уточнение: голосование передумало (типично для первых кадров, когда
             # номер ещё мелкий) — отдаём новое событие с пометкой updated, но только
             # если новый лидер уверенно перевесил старый, иначе получим болтанку
@@ -262,6 +292,7 @@ class TrackedSession:
                 previous = tr.emitted_text or None
                 tr.emitted_ts = ts
                 tr.emitted_text = tr.stable_text
+                self._emitted[tr.stable_text] = ts
                 pr.confirmed = True
                 m = plate_rules.match(tr.stable_text)
                 event = {

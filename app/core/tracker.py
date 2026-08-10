@@ -81,22 +81,62 @@ class Track:
         return top / other if other > 0 else float("inf")
 
 
-class PlateTracker:
-    """Простой IoU-трекер: пластины двигаются предсказуемо, этого достаточно."""
+def near_text(a: str, b: str, max_diff: int = 1) -> bool:
+    """Один и тот же номер с точностью до пары перепутанных символов.
 
-    def __init__(self, iou_threshold: float = 0.25, max_age: int = 20):
+    OCR стабильно путает O/Q, X/K, 0/8 — из-за этого один автомобиль выглядит как
+    два разных номера. Длины сравниваем строго: разная длина — разные номера.
+    """
+    if not a or not b or len(a) != len(b):
+        return False
+    diff = 0
+    for x, y in zip(a, b, strict=True):
+        if x != y:
+            diff += 1
+            if diff > max_diff:
+                return False
+    return True
+
+
+class PlateTracker:
+    """IoU-трекер с подстраховкой по тексту.
+
+    Геометрии достаточно, пока пластина смещается меньше чем на ~0.6 своей ширины
+    за кадр обработки (при IoU 0.25). На подвижной камере — съёмка на ходу, проезд
+    по парковке — этот запас кончается, трек рвётся, и одна машина порождает
+    несколько треков и несколько дублирующих событий. Поэтому боксам, которым не
+    хватило пересечения, даётся второй шанс: если текст совпал с уже ведомым
+    треком, это та же пластина.
+    """
+
+    def __init__(self, iou_threshold: float = 0.25, max_age: int = 20, by_text: bool = True):
         self.iou_threshold = iou_threshold
         self.max_age = max_age
+        self.by_text = by_text
         self._next_id = 1
         self.tracks: dict[int, Track] = {}
 
-    def update(self, boxes: list[tuple[int, int, int, int]], ts: float | None = None) -> list[int]:
+    def _attach(self, tid: int, box: tuple[int, int, int, int], ts: float) -> None:
+        tr = self.tracks[tid]
+        tr.box = box
+        tr.last_ts = ts
+        tr.age = 0
+        tr.hits += 1
+
+    def update(
+        self,
+        boxes: list[tuple[int, int, int, int]],
+        ts: float | None = None,
+        texts: list[str] | None = None,
+    ) -> list[int]:
         """Сопоставляет боксы с треками, возвращает track_id по порядку boxes."""
         ts = ts if ts is not None else time.time()
-        assigned: list[int] = []
+        texts = texts if texts is not None else [""] * len(boxes)
+        assigned: list[int | None] = [None] * len(boxes)
         used: set[int] = set()
 
-        for box in boxes:
+        # 1) геометрия: обычный путь, пока камера и объект двигаются небыстро
+        for i, box in enumerate(boxes):
             best_id, best_iou = -1, 0.0
             for tid, tr in self.tracks.items():
                 if tid in used:
@@ -105,28 +145,40 @@ class PlateTracker:
                 if v > best_iou:
                     best_id, best_iou = tid, v
             if best_id != -1 and best_iou >= self.iou_threshold:
-                tr = self.tracks[best_id]
-                tr.box = box
-                tr.last_ts = ts
-                tr.age = 0
-                tr.hits += 1
+                self._attach(best_id, box, ts)
                 used.add(best_id)
-                assigned.append(best_id)
-            else:
-                tid = self._next_id
-                self._next_id += 1
-                self.tracks[tid] = Track(
-                    track_id=tid, box=box, first_ts=ts, last_ts=ts, hits=1
-                )
-                used.add(tid)
-                assigned.append(tid)
+                assigned[i] = best_id
+
+        # 2) текст: для тех, кому пересечения не хватило
+        if self.by_text:
+            for i, box in enumerate(boxes):
+                if assigned[i] is not None or not texts[i]:
+                    continue
+                for tid, tr in self.tracks.items():
+                    if tid in used or not tr.stable_text:
+                        continue
+                    if near_text(tr.stable_text, texts[i]):
+                        self._attach(tid, box, ts)
+                        used.add(tid)
+                        assigned[i] = tid
+                        break
+
+        # 3) остальное — новые пластины
+        for i, box in enumerate(boxes):
+            if assigned[i] is not None:
+                continue
+            tid = self._next_id
+            self._next_id += 1
+            self.tracks[tid] = Track(track_id=tid, box=box, first_ts=ts, last_ts=ts, hits=1)
+            used.add(tid)
+            assigned[i] = tid
 
         for tid, tr in list(self.tracks.items()):
             if tid not in used:
                 tr.age += 1
                 if tr.age > self.max_age:
                     del self.tracks[tid]
-        return assigned
+        return [tid for tid in assigned if tid is not None]
 
     def get(self, track_id: int) -> Track | None:
         return self.tracks.get(track_id)
