@@ -34,7 +34,7 @@
   .ok { color:var(--ok) } .warn { color:var(--warn) } .muted { color:var(--muted) }
   .dot { width:8px; height:8px; border-radius:50%; display:inline-block; background:#555 }
   .dot.live { background:var(--ok); box-shadow:0 0 8px var(--ok) }
-  .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:10px }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:10px }
   .stat { background:#11161c; border:1px solid var(--line); border-radius:8px; padding:8px 10px }
   .stat b { display:block; font-size:18px } .stat span { color:var(--muted); font-size:11px }
   .chip { font-size:11px; padding:1px 6px; border-radius:999px; border:1px solid var(--line);
@@ -59,9 +59,15 @@
       <button id="btnStop" class="sec" disabled>Стоп</button>
       <label class="file">Файл (кадр)<input type="file" id="fileInput" accept="image/*"></label>
       <label class="file">Видео → WS<input type="file" id="videoInput" accept="video/*"></label>
-      <span class="badge">FPS отправки:
-        <input id="sendFps" type="number" min="1" max="30" value="8" style="width:52px">
+      <span class="badge" title="Верхний предел. Реальная частота = 1 / время ответа сервера:
+следующий кадр уходит только после ответа на предыдущий, иначе задержка копится.">
+        Лимит FPS:
+        <input id="sendFps" type="number" min="1" max="60" value="30" style="width:52px">
       </span>
+      <label class="badge" title="Плавно: видно живое видео 60 к/с, но рамка отстаёт на время обработки.
+Точно: показывается тот кадр, по которому посчитаны рамки — они совпадают, но картинка идёт с частотой обработки.">
+        <input type="checkbox" id="smooth"> плавное видео
+      </label>
     </div>
     <div class="stage">
       <video id="video" autoplay muted playsinline></video>
@@ -69,7 +75,8 @@
     </div>
     <div class="stats">
       <div class="stat"><b id="sFps">0</b><span>FPS обработки</span></div>
-      <div class="stat"><b id="sLat">0</b><span>задержка, мс</span></div>
+      <div class="stat"><b id="sLat">0</b><span>инференс, мс</span></div>
+      <div class="stat"><b id="sRt">0</b><span>круг отправка→ответ, мс</span></div>
       <div class="stat"><b id="sDet">0</b><span>номеров в кадре</span></div>
     </div>
   </div>
@@ -130,6 +137,8 @@ function openWs() {
 function onResult(msg) {
   lastResult = msg;
   document.getElementById('sFps').textContent = (msg.fps || 0).toFixed(1);
+  const rt = Date.now() - sentAt;                      // полный круг: отправка -> ответ
+  document.getElementById('sRt').textContent = rt > 0 && rt < 10000 ? Math.round(rt) : '—';
   document.getElementById('sLat').textContent = Math.round(msg.server_ms || 0);
   document.getElementById('sDet').textContent = msg.plates.length;
   drawBoxes(msg);
@@ -142,10 +151,12 @@ function drawBoxes(msg) {
   if (!w || !h) return;
   canvas.width = w; canvas.height = h;
   ctx.clearRect(0, 0, w, h);
-  // сначала кадр, по которому считались боксы, потом сами боксы — так рамка
-  // всегда совпадает с картинкой, даже когда обработка отстаёт от видео
+  // Точный режим: подкладываем кадр, по которому посчитаны боксы, — рамка всегда
+  // совпадает с картинкой. Плавный: canvas остаётся прозрачным, сквозь него видно
+  // живое видео 60 к/с, но рамка отстаёт на время обработки.
   if (inFlight) {
-    ctx.drawImage(inFlight, 0, 0, w, h);
+    if (!document.getElementById('smooth').checked)
+      ctx.drawImage(inFlight, 0, 0, w, h);
     inFlight.close();
     inFlight = null;
   }
