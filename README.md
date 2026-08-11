@@ -19,7 +19,7 @@
 
 ## 🚗 Демонстрация работы ANPR системы
 
-https://github.com/user-attachments/assets/c7337921-20c5-4a97-a00c-f4e410165701
+https://github.com/user-attachments/assets/081c6778-7539-40a8-b15e-88d188628fd0
 
 *Процесс детектирования номерных знаков, трекинга авто и распознавания символов (OCR) в реальном времени.*
 
