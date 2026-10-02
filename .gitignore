@@ -22,3 +22,6 @@ best_accuracy.pth
 # рабочие заметки и логи отладки — не для репозитория
 aaa*.txt
 *.bak
+
+# локальные настройки Claude Code
+.claude/
