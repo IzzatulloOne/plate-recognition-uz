@@ -1,0 +1,45 @@
+[Unit]
+Description=ANPR Uzbekistan (YOLO11 + TPS-ResNet-BiLSTM-CTC)
+Documentation=https://github.com/IzzatulloOne/plate-recognition-uz
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=@USER@
+Group=@USER@
+WorkingDirectory=@ROOT@/app
+
+# EnvironmentFile здесь намеренно НЕ используется: у systemd свой формат, он не
+# понимает комментарии в конце строки. Строка `ANPR_PREPROCESS=resize  # resize | pad`
+# из .env.example превратилась бы в значение вместе с комментарием. Настройки
+# читает pydantic-settings сам — у него env_file=".env" относительно WorkingDirectory.
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=@ROOT@/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+# Наружу торчит только nginx, uvicorn слушает петлю.
+Restart=always
+RestartSec=5
+# Модели грузятся ~11 с на десктопе и до минуты на слабом vCPU. Type=exec считает
+# сервис поднятым сразу после запуска процесса, поэтому таймаут щедрый — он тут
+# страхует только совсем зависший старт.
+TimeoutStartSec=180
+TimeoutStopSec=30
+
+# Замер: 1.09 ГБ RSS с загруженными моделями. Потолок с запасом — если процесс
+# полез за него, это утечка, и лучше рестарт, чем OOM-killer на всю машину.
+MemoryMax=3G
+
+# Права по минимуму: писать можно только в data/ (база событий и снапшоты).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@ROOT@/app/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
