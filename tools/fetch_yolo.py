@@ -2,10 +2,11 @@
 
 Два источника:
 
+  n/s/m/l/x — morsetechlab/yolov11-license-plate-detection (YOLO11 разных размеров).
+          Размер n — детектор по умолчанию в этом проекте, он же в ANPR_DETECTOR_WEIGHTS.
   lpr   — license_plate_detector.pt из репозитория
           Muhammad-Zeerak-Khan/Automatic-License-Plate-Recognition-using-YOLOv8
-          (YOLOv8n). Детектор по умолчанию в этом проекте.
-  n/s/m/l/x — morsetechlab/yolov11-license-plate-detection (YOLO11 разных размеров).
+          (YOLOv8n). Для сравнения.
 
 Замеры на выборке из 40 узбекских номеров (CPU, оригиналы ~1500 px, imgsz=640,
 без второго прохода) — подробности в README:
@@ -14,8 +15,8 @@
     yolo11n-plate      37/40 найдено,  66 мс/кадр
     yolo11s-plate      37/40 найдено, 167 мс/кадр   <- медленнее, не точнее
 
-    python -m tools.fetch_yolo              # lpr (по умолчанию)
-    python -m tools.fetch_yolo -m lpr n     # несколько
+    python -m tools.fetch_yolo              # yolo11n (по умолчанию, его ждёт конфиг)
+    python -m tools.fetch_yolo -m n lpr     # несколько
     python -m tools.fetch_yolo -m s --onnx  # только для yolo11*
 """
 
@@ -32,7 +33,16 @@ LPR_URL = (
     "Automatic-License-Plate-Recognition-using-YOLOv8/raw/main/license_plate_detector.pt"
 )
 MODELS = ("lpr", "n", "s", "m", "l", "x")
+#: Обязано давать тот же файл, что ждёт Settings.detector_weights —
+#: иначе свежая установка по README падает на старте. Проверяется тестом.
+DEFAULT_MODELS = ["n"]
 OUT_DIR = Path(__file__).resolve().parent.parent / "models"
+
+
+def weights_name(name: str, onnx: bool = False) -> str:
+    """Имя файла, который положит fetch() для данного ключа модели."""
+    ext = "onnx" if onnx else "pt"
+    return "lpr-yolov8n-plate.pt" if name == "lpr" else f"yolo11{name}-plate.{ext}"
 
 
 def fetch(name: str, onnx: bool = False) -> Path:
@@ -41,7 +51,7 @@ def fetch(name: str, onnx: bool = False) -> Path:
     if name == "lpr":
         if onnx:
             raise SystemExit("для lpr есть только .pt")
-        dst = OUT_DIR / "lpr-yolov8n-plate.pt"
+        dst = OUT_DIR / weights_name("lpr")
         with urllib.request.urlopen(LPR_URL, timeout=120) as resp:
             dst.write_bytes(resp.read())
         return dst
@@ -50,7 +60,7 @@ def fetch(name: str, onnx: bool = False) -> Path:
 
     ext = "onnx" if onnx else "pt"
     src = hf_hub_download(HF_REPO, f"license-plate-finetune-v1{name}.{ext}")
-    dst = OUT_DIR / f"yolo11{name}-plate.{ext}"
+    dst = OUT_DIR / weights_name(name, onnx)
     shutil.copy(src, dst)
     return dst
 
@@ -59,7 +69,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("-m", "--models", nargs="+", default=["lpr"], choices=MODELS)
+    ap.add_argument("-m", "--models", nargs="+", default=DEFAULT_MODELS, choices=MODELS)
     ap.add_argument("--onnx", action="store_true", help="скачать .onnx вместо .pt (только yolo11*)")
     args = ap.parse_args()
 
@@ -67,7 +77,7 @@ def main() -> int:
         dst = fetch(name, args.onnx)
         print(f"{dst}  ({dst.stat().st_size / 1e6:.1f} MB)")
     print(
-        "\nВыбор весов: ANPR_DETECTOR_WEIGHTS=models/lpr-yolov8n-plate.pt в .env"
+        "\nВыбор весов: ANPR_DETECTOR_WEIGHTS=models/yolo11n-plate.pt в .env"
         "\nСравнить на своих данных: python -m tools.eval_uz --compare models/*.pt"
     )
     return 0

@@ -260,3 +260,24 @@ def test_streams_lifecycle(client):
 def test_events_endpoint(client):
     assert isinstance(client.get("/v1/events?limit=5").json(), list)
     assert "events" in client.get("/v1/stats").json()
+
+
+# ------------------------------------------------------- установка на чистой машине
+
+
+def test_fetch_yolo_default_matches_config():
+    """`python -m tools.fetch_yolo` без аргументов обязан скачать то, что ждёт конфиг.
+
+    Эти два значения жили в разных файлах и разъехались: скрипт качал
+    `lpr-yolov8n-plate.pt`, а конфиг искал `yolo11n-plate.pt`. Локально это не
+    всплывало — старые веса уже лежали, — зато свежая установка по README падала
+    с FileNotFoundError на старте.
+    """
+    from app.config import Settings
+    from tools.fetch_yolo import DEFAULT_MODELS, weights_name
+
+    expected = Settings().detector_weights.name
+    downloaded = {weights_name(m) for m in DEFAULT_MODELS}
+    assert expected in downloaded, (
+        f"конфиг ждёт {expected}, а fetch_yolo по умолчанию качает {sorted(downloaded)}"
+    )
