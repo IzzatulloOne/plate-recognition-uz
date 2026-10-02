@@ -14,6 +14,9 @@ class BidirectionalLSTM(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: visual feature [b, T, input_size] -> [b, T, output_size]"""
-        self.rnn.flatten_parameters()
+        # После quantize_dynamic здесь стоит квантованный LSTM, у которого такого
+        # метода нет: с ANPR_QUANTIZE=true безусловный вызов ронял распознавание.
+        if hasattr(self.rnn, "flatten_parameters"):
+            self.rnn.flatten_parameters()
         recurrent, _ = self.rnn(x)
         return self.linear(recurrent)
