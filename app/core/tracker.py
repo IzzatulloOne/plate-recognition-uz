@@ -180,6 +180,28 @@ class PlateTracker:
                     del self.tracks[tid]
         return [tid for tid in assigned if tid is not None]
 
+    def absorb_by_text(self, track_id: int, text: str) -> int:
+        """Приклеить свежий трек к старому с тем же номером. Возвращает итоговый id.
+
+        Тот же второй шанс, что даёт `update(texts=...)`, но для порядка «трекинг
+        до распознавания»: там текст известен только после чтения, а решать про
+        склейку надо уже после. Склеиваем только трек, созданный в этом кадре, —
+        у накопившего голоса своя история, её терять нельзя.
+        """
+        if not self.by_text or not text:
+            return track_id
+        tr = self.tracks.get(track_id)
+        if tr is None or tr.hits > 1:
+            return track_id
+        for other_id, other in self.tracks.items():
+            if other_id == track_id or not other.stable_text:
+                continue
+            if near_text(other.stable_text, text):
+                self._attach(other_id, tr.box, tr.last_ts)
+                del self.tracks[track_id]
+                return other_id
+        return track_id
+
     def get(self, track_id: int) -> Track | None:
         return self.tracks.get(track_id)
 
