@@ -166,6 +166,108 @@ def layout_variants(crop: np.ndarray, max_ar: float = 2.3) -> list[list[np.ndarr
     return [[crop], [pad_to_ratio(ln) for ln in lines]]
 
 
+def unfold_lines(crop: np.ndarray, max_ar: float = 2.6) -> np.ndarray:
+    """Двухстрочный кроп -> одна строка: верхняя строка, справа от неё нижняя.
+
+    Порядок строк на пластине прицепа совпадает с порядком текста номера:
+    «8815» сверху, «BA 01» снизу -> «8815BA01» (проверено глазами на выборке).
+    Развёртка по пропорциям похожа на однострочную пластину и читается за один
+    проход, а не двумя, как строки по отдельности (184 мс против 97 на видео).
+
+    Читать развёртку модель учится в tools.train_recog — до дообучения она её
+    не знает. Обучение и чтение обязаны резать одной и той же функцией, иначе
+    модель увидит в работе не то, на чём училась.
+
+    Не квадратный кроп или кроп без разреза возвращается как есть — тем же
+    объектом, по этому вызывающий отличает «развернул» от «не стал».
+    """
+    h, w = crop.shape[:2]
+    if h <= 0 or w / h > max_ar:
+        return crop
+    lines = split_lines(crop)
+    if len(lines) != 2:
+        return crop
+    lh = min(ln.shape[0] for ln in lines)  # общая высота, ширина — пропорционально
+    parts = [
+        cv2.resize(
+            ln, (max(1, round(ln.shape[1] * lh / ln.shape[0])), lh), interpolation=cv2.INTER_AREA
+        )
+        for ln in lines
+    ]
+    return np.hstack(parts)
+
+
+def moto_unfold(crop: np.ndarray, min_ar: float = 0.6, max_ar: float = 1.9) -> np.ndarray:
+    """Квадратный номер мото/спецтехники (сетка 2x2) -> одна строка.
+
+    Раскладка не как у прицепа: регион стоит в отдельном окне справа-сверху, а не
+    в конце нижней строки.
+
+        197 | 01        читается 197 -> DA -> 01  (регион последний в ТЕКСТЕ,
+        DA  | флаг                                 но физически он в правом окне)
+
+    Поэтому обычная развёртка «верх+низ» дала бы 19701DA — неверно. Режем иначе:
+    левый блок (цифры над буквами) разворачиваем как две строки -> «197»+«DA»,
+    затем приклеиваем регион из правого верхнего окна -> «197»+«DA»+«01».
+
+    Не квадрат — возвращаем как есть (тем же объектом), по этому вызывающий
+    отличает «развернул» от «не стал».
+    """
+    h, w = crop.shape[:2]
+    if h <= 0 or not min_ar <= w / h <= max_ar:
+        return crop
+    # левый блок — основной (цифры/буквы), правый — окно региона с флагом УЗ
+    split = int(w * 0.66)
+    left, right = crop[:, :split], crop[:, split:]
+    region = right[: int(right.shape[0] * 0.55)]  # верх правого окна — цифры региона
+    main = unfold_lines(left, max_ar=max_ar)  # «197» над «DA» -> в строку
+    if main is left:  # левый блок не раскрылся на две строки — не мото-раскладка
+        return crop
+    lh = main.shape[0]
+    rw = max(1, round(region.shape[1] * lh / max(region.shape[0], 1)))
+    region = cv2.resize(region, (rw, lh), interpolation=cv2.INTER_AREA)
+    return np.hstack([main, region])
+
+
+def unfold_variants(crop: np.ndarray, max_ar: float = 2.6) -> list[list[np.ndarray]]:
+    """Как layout_variants, но двухстрочный вариант — одна развёрнутая строка.
+
+    Однострочный вариант остаётся первым: квадратный кроп бывает и однострочным
+    номером с большими полями, а выбор между ними делают правила форматов.
+    """
+    flat = unfold_lines(crop, max_ar)
+    return [[crop]] if flat is crop else [[crop], [flat]]
+
+
+def prep_gray(
+    img: np.ndarray, h: int, w: int, preprocess: str = "resize", contrast_boost: bool = False
+) -> np.ndarray:
+    """Кроп -> массив [h, w] в диапазоне [-1, 1], как его видит модель.
+
+    Вынесено из PlateRecognizer, чтобы обучение (tools.train_recog) готовило
+    кропы тем же кодом, что и чтение.
+    """
+    if img.ndim == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    if contrast_boost:
+        img = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(img)
+
+    if preprocess == "pad":
+        ratio = img.shape[1] / max(img.shape[0], 1)
+        new_w = min(w, max(1, int(np.ceil(h * ratio))))
+        resized = cv2.resize(img, (new_w, h), interpolation=cv2.INTER_CUBIC)
+        canvas = np.zeros((h, w), dtype=resized.dtype)
+        canvas[:, :new_w] = resized
+        if new_w < w:  # padding краевым столбцом, как NormalizePAD в DTRB/EasyOCR
+            canvas[:, new_w:] = resized[:, -1:]
+        img = canvas
+    else:
+        img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
+
+    arr = img.astype(np.float32) / 255.0
+    return (arr - 0.5) / 0.5
+
+
 class PlateRecognizer:
     """Ленивая загрузка модели, батч-инференс по кропам номеров."""
 
@@ -181,6 +283,7 @@ class PlateRecognizer:
         type_head: str | None = "ctype",
         two_line: bool = True,
         two_line_max_ar: float = 2.6,
+        two_line_mode: str = "split",
     ):
         if num_threads > 0:
             torch.set_num_threads(num_threads)
@@ -191,6 +294,9 @@ class PlateRecognizer:
         self.type_head = type_head
         self.two_line = two_line
         self.two_line_max_ar = two_line_max_ar
+        if two_line_mode not in ("split", "unfold"):
+            raise ValueError(f"two_line_mode: split | unfold, получено {two_line_mode!r}")
+        self.two_line_mode = two_line_mode
         self.model: ANPRNet
         self.model, self.info = load_model(weights, device=device)
         self.decoder = CTCDecoder(charset)
@@ -206,26 +312,9 @@ class PlateRecognizer:
 
     # ------------------------------------------------------------------ препроцесс
     def _prep_one(self, img: np.ndarray) -> np.ndarray:
-        h, w = self.info.img_h, self.info.img_w
-        if img.ndim == 3:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        if self.contrast_boost:
-            img = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(img)
-
-        if self.preprocess == "pad":
-            ratio = img.shape[1] / max(img.shape[0], 1)
-            new_w = min(w, max(1, int(np.ceil(h * ratio))))
-            resized = cv2.resize(img, (new_w, h), interpolation=cv2.INTER_CUBIC)
-            canvas = np.zeros((h, w), dtype=resized.dtype)
-            canvas[:, :new_w] = resized
-            if new_w < w:  # padding краевым столбцом, как NormalizePAD в DTRB/EasyOCR
-                canvas[:, new_w:] = resized[:, -1:]
-            img = canvas
-        else:
-            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_CUBIC)
-
-        arr = img.astype(np.float32) / 255.0
-        return (arr - 0.5) / 0.5
+        return prep_gray(
+            img, self.info.img_h, self.info.img_w, self.preprocess, self.contrast_boost
+        )
 
     def to_tensor(self, crops: list[np.ndarray]) -> torch.Tensor:
         batch = np.stack([self._prep_one(c) for c in crops])[:, None, :, :]
@@ -297,8 +386,9 @@ class PlateRecognizer:
 
         pieces: list[np.ndarray] = []
         plan: list[list[list[int]]] = []  # crop -> варианты -> индексы строк
+        layouts = unfold_variants if self.two_line_mode == "unfold" else layout_variants
         for crop in crops:
-            variants = layout_variants(crop, max_ar=self.two_line_max_ar)
+            variants = layouts(crop, max_ar=self.two_line_max_ar)
             plan.append(self._register(variants, pieces))
 
         parts = self.recognize_with_alternatives(pieces, topk=topk, beam=beam)

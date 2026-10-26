@@ -20,6 +20,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "httpx>=0.28", "ruff>=0.8"]
+# Только для tools.fetch_browser: сайт закрылся от HTTP-клиента, нужен живой Chromium.
+scrape = ["selenium>=4.20"]
 
 [build-system]
 requires = ["setuptools>=68"]

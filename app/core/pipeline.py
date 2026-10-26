@@ -44,6 +44,9 @@ class PlateResult:
     #: False — в этом кадре пластину не читали, текст взят из трека. Нужно клиенту,
     #: чтобы отличать свежее чтение от показа уже известного номера.
     recognized: bool = True
+    #: модель машины, на которой стоит номер («Nexia», «Cobalt»); пусто — не знаем
+    vehicle: str = ""
+    vehicle_conf: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -99,6 +102,7 @@ class ANPRPipeline:
             text_head=settings.text_head,
             type_head=settings.type_head,
             two_line=settings.two_line,
+            two_line_mode=settings.two_line_mode,
         )
         if settings.quantize:
             import torch
@@ -108,6 +112,14 @@ class ANPRPipeline:
             )
         self._type_head_colors = settings.type_head_color_set
         self._lock = threading.Lock()
+        self.vehicles = None
+        if settings.vehicle_weights:
+            from app.core.vehicle import VehicleClassifier
+
+            self.vehicles = VehicleClassifier(
+                settings.vehicle_weights, device=settings.device,
+                min_conf=settings.vehicle_min_conf,
+            )
 
     # ------------------------------------------------------------------ инференс
     # Детекция и распознавание разделены намеренно. На видео номер виден десятки
@@ -225,6 +237,14 @@ class ANPRPipeline:
         res = FrameResult(frame_size=(frame.shape[1], frame.shape[0]))
         dets, crops, res.detect_ms, res.retried = self.detect_plates(frame, allow_retry)
         res.plates, res.recognize_ms = self.recognize_crops(dets, crops)
+        if self.vehicles and res.plates:
+            with self._lock:
+                named = self.vehicles.classify(
+                    frame, [p.box for p in res.plates],
+                    [p.plate_class == "trailer" for p in res.plates],
+                )
+            for plate, (name, conf) in zip(res.plates, named, strict=True):
+                plate.vehicle, plate.vehicle_conf = name, round(conf, 3)
         res.total_ms = (time.perf_counter() - t_start) * 1000
         res._crops = crops  # type: ignore[attr-defined]
         return res

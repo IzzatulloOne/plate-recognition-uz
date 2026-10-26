@@ -88,8 +88,8 @@ def test_trailer_format_region_is_last():
 
 def test_colored_9symbol_formats():
     """Цветные номера УЗ: регион + буква серии + 6 цифр (зелёные и жёлтые)."""
-    green = plate_rules.match("01M018461")  # электромобиль, зелёный фон
-    assert green.valid and green.format == "uz_electric" and green.plate_class == "electric"
+    green = plate_rules.match("01M018461")  # совместное или иностранное предприятие
+    assert green.valid and green.format == "uz_joint" and green.plate_class == "joint"
     assert green.groups == ("01", "M", "018461")
 
     yellow = plate_rules.match("01H018461")  # транспорт иностранцев, жёлтый фон
@@ -98,8 +98,10 @@ def test_colored_9symbol_formats():
     other = plate_rules.match("01Z018461")  # другая серия того же скелета
     assert other.format == "uz_series6" and other.plate_class == "special"
 
-    # не должен перебивать формат мототранспорта (7 символов)
-    assert plate_rules.match("01A1234").format == "uz_moto"
+    # не должен перебивать формат мототранспорта (7 символов, как на сайте)
+    assert plate_rules.match("179FA01").format == "uz_moto"
+    # «01 A 1234» был придуман без данных и на сайте не встречается
+    assert plate_rules.match("01A1234").format is None
 
 
 def test_letter_i_excluded():
@@ -281,3 +283,124 @@ def test_fetch_yolo_default_matches_config():
     assert expected in downloaded, (
         f"конфиг ждёт {expected}, а fetch_yolo по умолчанию качает {sorted(downloaded)}"
     )
+
+
+def _two_line_plate():
+    """Синтетическая пластина прицепа: «8815» сверху, «BA 01» снизу."""
+    import cv2
+    import numpy as np
+
+    img = np.full((120, 170, 3), 235, np.uint8)
+    cv2.putText(img, "8815", (18, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (20, 20, 20), 4)
+    cv2.putText(img, "BA 01", (12, 108), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (20, 20, 20), 4)
+    return img
+
+
+def test_unfold_lines_puts_bottom_line_right_of_top():
+    from app.core.recognizer import unfold_lines
+
+    crop = _two_line_plate()
+    flat = unfold_lines(crop)
+    assert flat is not crop
+    h, w = flat.shape[:2]
+    assert h < crop.shape[0] and w > crop.shape[1], "развёртка должна стать низкой и широкой"
+    assert w / h > 2.6, "по пропорциям развёртка обязана походить на однострочную пластину"
+
+
+def test_unfold_lines_leaves_single_line_plate_alone():
+    import numpy as np
+
+    from app.core.recognizer import unfold_lines, unfold_variants
+
+    wide = np.full((30, 130, 3), 235, np.uint8)  # однострочная пластина, ar 4.3
+    assert unfold_lines(wide) is wide
+    assert unfold_variants(wide) == [[wide]]
+
+
+def test_vehicle_model_canonical_names():
+    from app.core.vehicle_models import canonical
+
+    # одна машина под разными именами — один класс
+    assert canonical("Chevrolet Cobalt") == canonical("Ravon R4") == "Cobalt"
+    assert canonical("Chevrolet Lacetti") == canonical("Ravon Gentra") == "Lacetti"
+    assert canonical("Daewoo Nexia") == canonical("Ravon Nexia R3") == "Nexia"
+    assert canonical("Chevrolet Malibu") == "Malibu"
+    assert canonical("Lada (VAZ) 2106") == canonical("Lada (VAZ) 2101") == "Жигули"
+    assert canonical("Lada (VAZ) Largus") == "Lada Largus"
+    assert canonical("Deepal (Shenlan) S7 (S07)") == "Deepal S7"
+    assert canonical("BYD Song") == "BYD Song"
+    assert canonical("Krone Profi Liner", trailer=True) == "Krone"
+    assert canonical("License plate without vehicle") == ""
+    assert canonical("") == ""
+
+
+def test_pick_vehicle_takes_car_that_carries_the_plate():
+    from app.core.vehicle import pick_vehicle
+
+    truck = [0, 0, 1000, 800]  # тягач во весь кадр
+    car = [600, 400, 900, 700]  # легковушка поверх него
+    plate_on_car = [700, 600, 780, 620]
+    # пластина внутри обеих рамок — берём самую тесную, то есть легковушку
+    assert pick_vehicle([truck, car], plate_on_car) == car
+    # центр пластины вне машин — модель не называем, а не гадаем по соседней
+    assert pick_vehicle([car], [10, 10, 50, 30]) is None
+    assert pick_vehicle([car], None) is None
+
+
+def test_trailer_plate_looks_only_at_trucks():
+    from app.core.vehicle import TRUCK, candidates, pick_vehicle
+
+    car, trailer = [100, 300, 400, 600], [0, 0, 1000, 700]
+    cars = [(car, 2), (trailer, TRUCK)]
+    plate = [200, 500, 260, 540]  # центр внутри обеих рамок
+    assert pick_vehicle(candidates(cars, trailer=False), plate) == car
+    # номер прицепа: легковушка перед ним — не его машина
+    assert pick_vehicle(candidates(cars, trailer=True), plate) == trailer
+
+
+def test_detector_benchmark_matching_is_one_to_one():
+    from tools.eval_detector import match
+
+    gt = [[0, 0, 100, 40], [200, 0, 260, 50]]
+    # две рамки на одну пластину засчитывают её один раз, вторая — ложная
+    assert match(gt, [[2, 1, 101, 41], [0, 0, 98, 39]]) == {0}
+    assert match(gt, [[202, 2, 259, 49], [0, 0, 100, 40]]) == {0, 1}
+    assert match(gt, [[500, 500, 600, 540]]) == set()  # мимо — не попадание
+
+
+def test_formats_measured_on_site_categories():
+    from app.core import plate_rules
+
+    # номера взяты из категорий сайта: мотоциклы, спецтехника, высшие органы
+    moto = plate_rules.match("179FA01")
+    assert moto.format == "uz_moto" and moto.groups[2] == "01" and moto.region_ok
+    assert plate_rules.match("429NA10").format == "uz_moto"  # спецтехника — та же раскладка
+    gov = plate_rules.match("PAA104")
+    assert gov.format == "uz_gov" and gov.region_ok  # у высших органов региона нет
+    assert plate_rules.match("01M016493").plate_class == "joint"
+
+
+def test_moto_unfold_puts_region_after_letters():
+    import cv2
+    import numpy as np
+
+    from app.core.recognizer import moto_unfold
+
+    # сетка 2x2: «197» слева-сверху, «DA» слева-снизу, «01» справа-сверху
+    img = np.full((120, 130, 3), 235, np.uint8)
+    cv2.putText(img, "197", (6, 48), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (20, 20, 20), 3)
+    cv2.putText(img, "DA", (6, 104), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (20, 20, 20), 3)
+    cv2.putText(img, "01", (92, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20, 20, 20), 2)
+    flat = moto_unfold(img)
+    assert flat is not img
+    h, w = flat.shape[:2]
+    assert w / h > 2.5, "развёртка мото обязана стать низкой и широкой, как строка"
+
+
+def test_moto_unfold_leaves_wide_plate_alone():
+    import numpy as np
+
+    from app.core.recognizer import moto_unfold
+
+    wide = np.full((30, 130, 3), 235, np.uint8)  # однострочная, не сетка
+    assert moto_unfold(wide) is wide

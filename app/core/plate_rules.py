@@ -26,8 +26,9 @@ VALID_REGIONS = {f"{i:02d}" for i in range(1, 96)}
 class PlateFormat:
     name: str
     regex: str
-    plate_class: str  # private | legal | electric | foreign | trailer | moto | special
-    region_group: int = 1  # какая группа содержит код региона (у прицепов он последний)
+    plate_class: str  # private | legal | joint | foreign | trailer | moto | gov | special
+    #: какая группа содержит код региона (у прицепов он последний); 0 — региона нет
+    region_group: int = 1
     pretty: str = ""  # шаблон вывода, например "{0} {1} {2} {3}"
 
     def compiled(self) -> re.Pattern:
@@ -55,15 +56,22 @@ PLATE_FORMATS: list[PlateFormat] = [
     # Девятисимвольные: регион + одна буква серии + 6 цифр. Именно из этого набора
     # состоят цветные номера УЗ, и алфавит второй головы модели (цифры + H + M) ровно
     # ему соответствует — см. ANPR_TYPE_HEAD_COLORS в README.
-    #   01 M 018461 — зелёные, электромобили (встречены в выборке platesmania)
-    #   01 H 018461 — жёлтые, транспорт иностранцев (буква — по смыслу серии)
-    PlateFormat("uz_electric", r"^(\d{2})(M)(\d{6})$", "electric"),
+    #   01 M 018461 — совместные и иностранные предприятия. Раньше формат назывался
+    #                 uz_electric, но сайт относит эти номера к «Joint ventures and
+    #                 foreign enterprises», и стоят они на Cobalt, Damas, Nexia и
+    #                 грузовиках DAF — обычных машинах фирм, а не на электромобилях.
+    #   01 H 018461 — иностранные граждане (категория сайта «Foreign citizens»)
+    PlateFormat("uz_joint", r"^(\d{2})(M)(\d{6})$", "joint"),
     PlateFormat("uz_foreign", r"^(\d{2})(H)(\d{6})$", "foreign"),
     PlateFormat("uz_series6", rf"^(\d{{2}})([{LETTERS}])(\d{{6}})$", "special"),
-    # 01 A 1234 — мототранспорт
-    PlateFormat("uz_moto", rf"^(\d{{2}})([{LETTERS}])(\d{{4}})$", "moto"),
-    # 01 AB 123 — служебные/спец
-    PlateFormat("uz_special", rf"^(\d{{2}})([{LETTERS}]{{2}})(\d{{3}})$", "special"),
+    # 179 FA 01 — мотоциклы и спецтехника: на сайте у обеих категорий одна раскладка,
+    # три цифры, две буквы и регион последним, как у прицепов. Прежние шаблоны
+    # «01 A 1234» и «01 AB 123» были придуманы без данных и на сайте не встречаются.
+    PlateFormat(
+        "uz_moto", rf"^(\d{{3}})([{LETTERS}]{{2}})(\d{{2}})$", "moto", region_group=3
+    ),
+    # PAA 104 — высшие органы власти: кода региона нет
+    PlateFormat("uz_gov", rf"^([{LETTERS}]{{3}})(\d{{3}})$", "gov", region_group=0),
 ]
 
 _FORMATS_JSON = Path(__file__).resolve().parent.parent.parent / "plate_formats.json"
@@ -110,7 +118,7 @@ def match(text: str) -> PlateMatch:
                 format=fmt.name,
                 plate_class=fmt.plate_class,
                 groups=m.groups(),
-                region_ok=m.group(fmt.region_group) in VALID_REGIONS,
+                region_ok=fmt.region_group == 0 or m.group(fmt.region_group) in VALID_REGIONS,
             )
     return PlateMatch(text=t, format=None, plate_class="unknown")
 
@@ -142,7 +150,8 @@ def _coerce_to(text: str, pattern: str) -> str | None:
 
 
 #: скелеты позиций, соответствующие PLATE_FORMATS (D=цифра, L=буква)
-_SKELETONS = ["DDLDDDLL", "DDDDDLLL", "DDDDLLDD", "DDLDDDDDD", "DDLDDDD", "DDLLDDD"]
+#: раскладки форматов для исправления путаницы символов — те же, что в PLATE_FORMATS
+_SKELETONS = ["DDLDDDLL", "DDDDDLLL", "DDDDLLDD", "DDLDDDDDD", "DDDLLDD", "LLLDDD"]
 
 
 def dedup_variants(text: str, max_removals: int = 2) -> list[str]:

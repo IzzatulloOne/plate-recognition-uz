@@ -1,0 +1,128 @@
+{
+ "как пользоваться": "у каждой модели — файл, sha256 (сверить: sha256sum <файл>), откуда взять или как обучить, параметры и замеры. Порядок восстановления — docs/REPRODUCE.md. Веса в git не лежат: копировать файлы или брать из источника, указанного у модели.",
+ "код": {
+  "коммит на момент записи": "cad62a7-dirty",
+  "примечание": "модели ниже обучены кодом, который ещё не был закоммичен; после коммита — вписать его хеш сюда"
+ },
+ "модели": {
+  "recognizer-base": {
+   "файл": "best_accuracy.pth",
+   "sha256": "316900e08f6d4955390828331d82900e5675b1c3e8511bb82186fe0d6e28cfc7",
+   "МБ": 196.1,
+   "статус": "в работе (по умолчанию)",
+   "что": "распознаватель TPS-ResNet-BiLSTM-CTC, 49.0 млн параметров, две CTC-головы",
+   "откуда": "huggingface.co/IzzatulloOne/anpr-uz (публично), файл best_accuracy.pth",
+   "замеры": {
+    "эталон 80": "72/80",
+    "частные": "60/64",
+    "прицепы 224 (split)": "0/224"
+   }
+  },
+  "recognizer-run1-trailers-only": {
+   "файл": "data/kaggle/run1/run/best_accuracy.pth",
+   "sha256": "faffac4189f43409211fbe5162e4526c344ed208a1ed3f92435b4ac6ac225c33",
+   "МБ": 196.1,
+   "статус": "отклонён для сервиса: забывает частные; используется как проверяльщик прицепов (build_dataset --verifier)",
+   "откуда": "Kaggle, ноутбук <kaggle-user>/notebookeb6a2ec635, сохранённая версия: kaggle kernels output <kaggle-user>/notebookeb6a2ec635 -p data/kaggle/run1 --file-pattern '^run/'",
+   "параметры": {
+    "скрипт": "tools.train_recog",
+    "epochs": 30,
+    "batch": 128,
+    "lr": 0.0001,
+    "workers": 4,
+    "seed": 0,
+    "GPU": "Kaggle Tesla T4",
+    "данные": "309 кропов прицепов (247 train), однострочных 0; разбиение тогда было по pid фото"
+   },
+   "замеры": {
+    "эталон 80": "65/80",
+    "частные": "52/64",
+    "прицепы 224, unfold": "58/224 (48 по самому уверенному боксу)",
+    "кропы прицепов val": "59/78"
+   }
+  },
+  "detector-base": {
+   "файл": "models/yolo11n-plate.pt",
+   "sha256": "0aec75976c56eb6f26dfb274c430620ec65137915ff1ae47c3a48c7af8afb7b2",
+   "МБ": 5.5,
+   "статус": "в работе (по умолчанию)",
+   "откуда": "python -m tools.fetch_yolo (morsetechlab/yolov11-license-plate-detection)"
+  },
+  "coco-vehicle-detector": {
+   "файл": "models/yolo11n.pt",
+   "sha256": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1",
+   "МБ": 5.6,
+   "откуда": "ultralytics: attempt_download_asset('models/yolo11n.pt')",
+   "для": "поиска машины в кадре (app/core/vehicle.py)"
+  },
+  "cls-base-imagenet": {
+   "файл": "models/yolo11n-cls.pt",
+   "sha256": "c62d41bf9625777760018bf914d2e6cd472420ccd01706d97a61cb6c82502bd7",
+   "МБ": 5.8,
+   "откуда": "ultralytics: attempt_download_asset('models/yolo11n-cls.pt')"
+  },
+  "vehicle-cls-v1": {
+   "файл": "models/vehicle-cls-v1.pt",
+   "sha256": "07fd1e5492ca3d44e1fd600d481f10ad8c4f3debe9318222d61c21bb19415045",
+   "МБ": 3.2,
+   "статус": "заменён v2",
+   "что": "12 моделей + «другое», обучение на 1801 кропе",
+   "замеры": {
+    "test": "237/257",
+    "через сервис, eval-v2 224 фото": "назвал 145, верно 130"
+   }
+  },
+  "vehicle-cls-v2": {
+   "файл": "models/vehicle-cls-v2.pt",
+   "sha256": "8b9e5d50a913810e7d1aa5b9335e383c25f7a91084784f15862e82461c6ad0bf",
+   "МБ": 3.3,
+   "onnx": {
+    "файл": "models/vehicle-cls-v2.onnx",
+    "sha256": "1f1cd161b640cd7b5bc9a80a8a90ba58027ccbac201495b8f7f636e8a9ddcba5",
+    "МБ": 6.4
+   },
+   "статус": "готов, включается ANPR_VEHICLE_WEIGHTS=models/vehicle-cls-v2.pt",
+   "что": "41 модель + «другое» (42 класса), YOLO11n-cls 1.55 млн параметров",
+   "параметры": {
+    "скрипт": "tools.build_vehicles && tools.train_vehicles --epochs 30",
+    "epochs": "30",
+    "patience": "10",
+    "batch": "32",
+    "imgsz": "224",
+    "pretrained": "true",
+    "optimizer": "auto",
+    "seed": "0",
+    "deterministic": "true",
+    "lr0": "0.01",
+    "база": "models/yolo11n-cls.pt",
+    "устройство": "CPU, 3 ч 20 мин",
+    "данные": "train 9230 / val 1166 / test 1208 кропов",
+    "полные параметры": "models/vehicle-cls-v2.args.yaml"
+   },
+   "замеры": {
+    "test": "1096/1208 (91%)",
+    "Cobalt": "60/60",
+    "Nexia": "63/65",
+    "Lacetti": "66/68",
+    "Malibu": "17/22",
+    "Schmitz": "121/124",
+    "Krone": "98/108"
+   },
+   "отчёт": "models/vehicle-cls-v2.report.json"
+  }
+ },
+ "данные": {
+  "индекс": {
+   "файл": "data/uz/index.json",
+   "фото": 12152,
+   "дата": "2026-10-25",
+   "сбор": "tools.fetch_browser, команды — data/night.sh и data/night2.sh (копии в docs/REPRODUCE.md)"
+  },
+  "разбиение": "по тексту номера (build_dataset._split): test 10% = eval-v2, val 10%",
+  "эталоны": {
+   "data/eval": "80 фото, исторический (72/80)",
+   "data/eval-v2": "1273 фото: частные 531, прицепы 438, юрлица 207, M 63, H 34",
+   "data/det-bench": "180 фото для детектора, рамки ставит человек (tools.label_boxes)"
+  }
+ }
+}

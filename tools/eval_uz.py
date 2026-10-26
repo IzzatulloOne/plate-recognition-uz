@@ -91,9 +91,14 @@ def fetch(
     out_dir: Path | None = None,
     orig: bool = True,
     colors: set[str] | None = None,
+    formats: set[str] | None = None,
     max_pages: int = 40,
 ) -> dict:
     """Скачивает выборку (фото + текст номера) со страниц галереи.
+
+    formats — брать только номера этих форматов (например {"uz_trailer"}). Фильтр
+    бесплатный: текст номера есть прямо в листинге, поэтому большое фото качается
+    только для подходящих — в отличие от colors, где за цвет надо тянуть информер.
 
     colors — брать только номера с таким цветом фона (например {"yellow", "green"}).
     Цвет определяется по информеру, поэтому большие фото качаются только для нужных.
@@ -131,6 +136,9 @@ def fetch(
             if pid in seen_pids or not gt:
                 continue
             seen_pids.add(pid)
+
+            if formats and plate_rules.match(gt).format not in formats:
+                continue
 
             color, frac = "", 0.0
             if colors:
@@ -288,6 +296,10 @@ def main() -> int:
         help="брать только номера этих цветов, напр. yellow,green "
         "(цвет определяется по информеру, большие фото качаются только для них)",
     )
+    ap.add_argument(
+        "--formats",
+        help="брать только эти форматы, напр. uz_trailer (фильтр бесплатный)",
+    )
     ap.add_argument("--max-pages", type=int, default=40)
     ap.add_argument("--imgsz", type=int)
     ap.add_argument("--conf", type=float)
@@ -307,6 +319,7 @@ def main() -> int:
             out_dir=out_dir,
             orig=not args.medium,
             colors={c.strip() for c in args.colors.split(",")} if args.colors else None,
+            formats={f.strip() for f in args.formats.split(",")} if args.formats else None,
             max_pages=args.max_pages,
         )
 

@@ -26,6 +26,9 @@ class PlateOut(BaseModel):
     votes: int = 0
     stable_score: float = 0.0
     confirmed: bool = False
+    vehicle: str = Field("", description="модель машины: Nexia, Cobalt, Schmitz; пусто — "
+                         "не распознана, не уверены или ANPR_VEHICLE_WEIGHTS не задан")
+    vehicle_conf: float = 0.0
 
 
 class Timings(BaseModel):
