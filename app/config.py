@@ -28,9 +28,9 @@ class Settings(BaseSettings):
     #: Двухстрочные квадратные пластины (прицепы). Текущий чекпоинт их не читает
     #: (0/4 на выборке), а стоит это дорого: на реальном видео 36% кропов уходят
     #: на двойное чтение, распознавание 184 мс против 97. Включать после дообучения.
-    two_line: bool = False
+    two_line: bool = True
     two_line_mode: str = Field(
-        "split",
+        "unfold",
         description="split — строки читаются по отдельности (чекпоинт как есть); "
         "unfold — кроп разворачивается в одну строку и читается за проход. "
         "unfold требует чекпоинта, дообученного tools.train_recog.",
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     vehicle_min_conf: float = Field(0.5, description="ниже — модель машины не называется")
 
     # ---------------------------------------------------------------- детектор
-    detector_weights: Path = ROOT / "models" / "yolo11n-plate.pt"
+    detector_weights: Path = ROOT / "models" / "anpr-det-v1.pt"
     det_imgsz: int = 640
     det_conf: float = 0.35
     det_iou: float = 0.5

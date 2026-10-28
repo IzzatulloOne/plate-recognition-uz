@@ -25,3 +25,4 @@ aaa*.txt
 
 # локальные настройки Claude Code
 .claude/
+best_accuracy.pth*

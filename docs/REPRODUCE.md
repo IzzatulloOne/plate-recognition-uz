@@ -104,7 +104,8 @@ ANPR_VEHICLE_WEIGHTS=models/vehicle-cls-v2.pt ./.venv/bin/python -m uvicorn app.
 
 | Что | Размер | Нужно для |
 |---|---|---|
-| `best_accuracy.pth`, `models/*.pt`, `models/*.onnx` | ~230 МБ | работы сервиса |
+| `best_accuracy.pth` (распознаватель v2), `models/anpr-det-v1.pt` (детектор) | дефолтные веса сервиса; как и `best_accuracy.pth`, обученные нами — не из `fetch_yolo`, копировать или залить на HF |
+| `models/yolo11n-plate.pt`, `models/yolo11n*.pt` | базы для дообучения (`fetch_yolo`, ultralytics) |
 | `data/kaggle/run*/run/best_accuracy.pth` | 188 МБ каждый | проверяльщик прицепов |
 | `data/uz/index.json` + `data/uz/photos/` | ~6 ГБ | пересборки датасетов |
 | `data/eval*`, `data/det-bench/` | небольшие | замеров |

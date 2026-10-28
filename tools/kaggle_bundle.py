@@ -26,7 +26,7 @@ DET_OUT = ROOT / "data" / "kaggle" / "anpr-uz-det.zip"
 BASE_DETECTOR = ROOT / "models" / "yolo11n-plate.pt"
 
 
-def detector_bundle(max_side: int = 1024, max_other: int = 2500, seed: int = 0) -> int:
+def detector_bundle(max_side: int = 1024, max_other: int = 800, seed: int = 0) -> int:
     """Архив для дообучения детектора: все фото с прицепами + столько же прочих.
 
     Все 8 тысяч фото в оригинале — около 2 ГБ. Прицепы — то, чему учим, их берём
@@ -49,12 +49,15 @@ def detector_bundle(max_side: int = 1024, max_other: int = 2500, seed: int = 0) 
     picked: list[Path] = []
     for part in ("train", "val"):
         imgs = sorted((DETSET / "images" / part).glob("*.jpg"))
-        trailers = [f for f in imgs
-                    if plate_rules.match(plates_of.get(f.stem, "")).plate_class == "trailer"]
-        is_trailer = set(trailers)
-        other = [f for f in imgs if f not in is_trailer]
+        # Квадратные (прицепы, мото, спец) — то, чему учим детектор, берём все.
+        # Однострочные (частные, юрлица) — выборку, чтобы не разучился их видеть.
+        square = [f for f in imgs
+                  if plate_rules.match(plates_of.get(f.stem, "")).plate_class
+                  in ("trailer", "moto", "special")]
+        is_square = set(square)
+        other = [f for f in imgs if f not in is_square]
         share = max_other if part == "train" else max_other // 8
-        picked += trailers + rng.sample(other, min(share, len(other)))
+        picked += square + rng.sample(other, min(share, len(other)))
 
     DET_OUT.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(DET_OUT, "w", zipfile.ZIP_STORED) as z:  # JPEG уже сжат

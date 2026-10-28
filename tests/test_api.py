@@ -267,21 +267,21 @@ def test_events_endpoint(client):
 # ------------------------------------------------------- установка на чистой машине
 
 
-def test_fetch_yolo_default_matches_config():
-    """`python -m tools.fetch_yolo` без аргументов обязан скачать то, что ждёт конфиг.
+def test_fetch_yolo_provides_the_finetune_base():
+    """`fetch_yolo` обязан дать базовый детектор, с которого идёт дообучение.
 
-    Эти два значения жили в разных файлах и разъехались: скрипт качал
-    `lpr-yolov8n-plate.pt`, а конфиг искал `yolo11n-plate.pt`. Локально это не
-    всплывало — старые веса уже лежали, — зато свежая установка по README падала
-    с FileNotFoundError на старте.
+    Раньше конфиг указывал прямо на базовый `yolo11n-plate.pt`, и тест сверял
+    их имена. Теперь дефолт конфига — обученный `anpr-det-v1.pt` (раздаётся
+    отдельно, как best_accuracy.pth), а `fetch_yolo` даёт БАЗУ для дообучения.
+    База должна совпадать с той, от которой стартует обучение детектора
+    (kaggle_bundle.BASE_DETECTOR), иначе свежая установка дообучает не с того.
     """
-    from app.config import Settings
     from tools.fetch_yolo import DEFAULT_MODELS, weights_name
+    from tools.kaggle_bundle import BASE_DETECTOR
 
-    expected = Settings().detector_weights.name
     downloaded = {weights_name(m) for m in DEFAULT_MODELS}
-    assert expected in downloaded, (
-        f"конфиг ждёт {expected}, а fetch_yolo по умолчанию качает {sorted(downloaded)}"
+    assert BASE_DETECTOR.name in downloaded, (
+        f"база дообучения {BASE_DETECTOR.name}, а fetch_yolo качает {sorted(downloaded)}"
     )
 
 
